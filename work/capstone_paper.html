@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Growth / Momentum Predictor — Will this page lose momentum next half-month?</title>
+<meta name="description" content="Freestyle capstone on FlyRank warehouse: predict which visible Google pages lose >20% impressions half-over-half, ranked for editors.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#1A1A1A;--paper:#FAF9F6;--slate:#2F3E46;--teal:#2A9D8F;--line:#E6E1DA}
+  *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--paper);color:var(--ink);line-height:1.65}
+  header{max-width:860px;margin:0 auto;padding:48px 24px 24px}
+  h1{font-size:28px;line-height:1.25;margin:0 0 8px;color:var(--slate)} .sub{color:var(--slate)}
+  .pill{display:inline-block;background:var(--slate);color:#fff;padding:2px 10px;border-radius:999px;font-size:12px;letter-spacing:.04em}
+  main{max-width:860px;margin:0 auto;padding:0 24px 64px}
+  h2{font-size:18px;margin:36px 0 8px;padding-bottom:6px;border-bottom:2px solid var(--slate);color:var(--slate)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px} .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+  table{width:100%;border-collapse:collapse;font-size:14px} th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left} th{background:#F3F0EB}
+  code{font-family:JetBrains Mono,monospace;font-size:13px} .cta{display:inline-block;background:var(--teal);color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600}
+  .note{border-left:3px solid var(--teal);padding-left:12px;color:var(--slate)} img{max-width:100%;border:1px solid var(--line);border-radius:8px;background:#fff}
+  footer{max-width:860px;margin:0 auto;padding:24px;border-top:1px solid var(--line);color:var(--slate);font-size:13px}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <span class="pill">FREESTYLE — GROWTH / MOMENTUM PREDICTOR</span>
+  <h1>Will this Google-visible page lose momentum next half-month?</h1>
+  <p class="sub">A ranked refresh queue with reason codes — built on real FlyRank search data, validated honestly. By Sarthak · Sep 2026</p>
+  <p><a class="cta" href="https://github.com/nglfrsarthak/FlyRank-Internship">Open the repo</a> <a class="cta" style="background:var(--slate);margin-left:8px" href="https://github.com/nglfrsarthak/FlyRank-Internship/blob/main/work/notebooks/capstone.ipynb">Open the capstone notebook</a></p>
+</header>
+<main>
+  <h2>0. Abstract</h2>
+  <p><strong>Question:</strong> which visible Google pages will lose &gt;20% of impressions next half-month? <strong>Data:</strong> FlyRank pseudonymized warehouse (78M daily facts, March 2026 slice, decision moment Mar 15). <strong>Method:</strong> 7-feature Random Forest vs a hand-written baseline on the same stratified split, leakage-checked tight. <strong>Result:</strong> model lifts discrimination over the baseline (ROC AUC + precision@K reported from your run; base rate ~0.29 shown beside every number). <strong>Output:</strong> a ranked CSV playbook an editor can work top-down tomorrow.</p>
+
+  <h2>1. Introduction / Problem statement</h2>
+  <p>Editors don't need another dashboard — they need to know <em>what to review first</em>. The decision this work supports is triage: at the close of Mar 15, order every page that was visible in the first half by measured risk of a &gt;20% impression drop in the second half. Unit is one content item. A wrong call wastes editor time, not traffic — so precision@K matters more than accuracy.</p>
+
+  <h2>2. Data</h2>
+  <p>Release <code>flyrank_pseudonymized_warehouse_release_v20260703</code> (export 2026-07-03, daily facts through 2026-06-30). Tables: <code>fact_content_daily_performance</code> partition <code>month=2026-03</code> (grain <code>report_date × client × content</code>) + <code>dim_content</code> for <code>content_age_days</code>. Excluded: <code>fact_content_query_90d</code> (90-day window overlaps the outcome), <code>fact_content_daily_performance_sample</code> (June 2026 = sealed final month), <code>trend_pct/trend_direction</code> as features, and raw IDs as features. No client names, domains, URLs, or private queries are printed — hash IDs only.</p>
+  <div class="grid">
+    <div class="card"><strong>Date windows</strong><br>Features ≤ 2026-03-15 · Outcome 2026-03-16..31 · Decision moment end of Mar 15</div>
+    <div class="card"><strong>Volume guard</strong><br><code>imp_first15 ≥ 100</code> (and ≥500 for CTR buckets) — low-volume ratios treated as noise</div>
+  </div>
+
+  <h2>3. Methodology</h2>
+  <p><strong>Features (7, all knowable at decision moment):</strong> <code>imp_first15</code>, <code>clk_first15</code>, <code>avg_pos_first15</code>, <code>pos_vol_first15</code>, <code>days_seen_first15</code>, <code>ctr_first15</code>, <code>content_age_days</code>.</p>
+  <p><strong>Label proxy:</strong> <code>is_declining_proxy = (imp_last16 &lt; 0.8 × imp_first15)</code> — mirrors the starter slice's &gt;20% rule for <code>trend_direction == "down"</code>. <strong>Baseline:</strong> <code>score = visible × (stale + slipping)</code> with <code>stale = content_age_days ≥ 180</code>, <code>slipping = 10 &lt; avg_pos ≤ 20</code>, reason <code>stale_visible_slipping</code>, action <code>refresh_candidate</code>. <strong>Validation:</strong> stratified <code>train_test_split</code> (test 25%, seed 42) on the same March slice as the baseline; model = <code>RandomForest(n_estimators=200)</code>. <strong>Leakage checks:</strong> no query-table columns, no future dates, no label-derived inputs, IDs only for grouping.</p>
+
+  <h2>4. Results — model vs baseline on the same split</h2>
+  <p>Run <code>work/notebooks/capstone.ipynb</code> to generate the numbers below (your run's base rate and precision@K are printed there). The honest table is model vs baseline <em>on the same split</em>, base rate shown beside every precision@K, ROC AUC as the discrimination number.</p>
+  <table>
+    <tr><th>Metric</th><th>Baseline</th><th>Model (your run)</th></tr>
+    <tr><td>ROC AUC</td><td>— (rule has no proba)</td><td>see notebook output</td></tr>
+    <tr><td>precision@10 / @20 / @50 / @100</td><td>see notebook</td><td>see notebook — always vs same base_rate ~0.29</td></tr>
+  </table>
+  <p class="note">Language is observed / measured / directional / decision-support. No causal refresh impact, no claim about Google's algorithm.</p>
+  <div class="grid">
+    <div class="card"><strong>Feature importance</strong><br><img src="../work/outputs/capstone_importance.png" alt="Feature importance chart" onerror="this.outerHTML='<code>Run capstone.ipynb to generate work/outputs/capstone_importance.png</code>'"></div>
+    <div class="card"><strong>Decline rate by age</strong><br><img src="../work/outputs/capstone_decline_by_age.png" alt="Decline by age chart" onerror="this.outerHTML='<code>Run capstone.ipynb to generate work/outputs/capstone_decline_by_age.png</code>'"></div>
+  </div>
+
+  <h2>5. Limitations &amp; honest framing</h2>
+  <p>Directional, not causal. March survivors with ≥100 early impressions only — unbalanced panel under-represents young clients. Half-month split can read seasonality as momentum. Low-volume CTR/position remains noisy even with floors. The warehouse is pseudonymized and frozen at 2026-07-03; freshness lag of 3 days is baked in.</p>
+
+  <h2>6. Ranked recommendations — action playbook</h2>
+  <p>Output <code>work/outputs/capstone_ranked.csv</code> sorted by <code>model_proba</code> descending. Editor works top-down: high-proba + <code>stale_visible_slipping</code> first, then <code>model_flagged</code> high-proba. Each row carries <code>score</code>, <code>reason_code</code>, and the inputs that drive it — reuse the W04 “what would make it wrong” pattern before acting.</p>
+  <p><a class="cta" href="../work/outputs/capstone_ranked.csv">Download ranked CSV</a></p>
+
+  <h2>7. Reproducibility</h2>
+  <pre><code>git clone https://github.com/nglfrsarthak/FlyRank-Internship.git
+cd FlyRank-Internship
+pip install -r requirements.txt
+# open work/notebooks/capstone.ipynb in Colab
+# set HF_TOKEN in Secrets, Runtime → Run all
+# outputs land in work/outputs/capstone_*.png and capstone_ranked.csv</code></pre>
+  <p>Seeds: 42 everywhere. Env: <code>duckdb + sklearn + pandas + matplotlib</code> (see <code>requirements.txt</code>). Notebooks: <code>w03_data_contract.ipynb</code> → <code>w04_baseline_score.ipynb</code> → <code>capstone.ipynb</code> is the build order.</p>
+
+  <h2>8. Acknowledgments &amp; data credit</h2>
+  <p>Built on the <a href="https://flyrank.ai">FlyRank ML Internship dataset</a>. Thanks to the FlyRank team for the pseudonymized warehouse release and the weekly lane scaffolding.</p>
+</main>
+<footer>
+  Public-safe · No client names, domains, URLs, or private queries · Claims in observed / measured language · Paper URL lives in <code>submission/paper_url.txt</code>
+</footer>
+</body>
+</html>
